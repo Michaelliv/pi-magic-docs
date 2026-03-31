@@ -10,13 +10,6 @@ Mark a doc with `# MAGIC DOC:`, work normally, and pi will periodically nudge it
 pi install npm:pi-magic-docs
 ```
 
-Or add it to `~/.pi/agent/settings.json`:
-
-```json
-{
-  "packages": ["npm:pi-magic-docs"]
-}
-```
 
 ## What it does
 
