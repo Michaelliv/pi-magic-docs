@@ -62,7 +62,7 @@ async function checkWithHaiku(
 
 	try {
 		const authStorage = AuthStorage.create();
-		const modelRegistry = ModelRegistry.create(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage);
 		let decision: { shouldUpdate: boolean; reason: string } | undefined;
 
 		const reportTool: ToolDefinition = {
@@ -84,7 +84,9 @@ async function checkWithHaiku(
 
 		const loader = new DefaultResourceLoader({
 			systemPromptOverride: () =>
-				"You decide whether documentation needs updating. Use the report_decision tool to answer.",
+				"You decide whether documentation needs updating. You MUST call the report_decision tool. Do not write text responses.",
+			cwd: "/tmp/pi-magic-docs-check",
+			agentDir: "/tmp/pi-magic-docs-check",
 		});
 		await loader.reload();
 
