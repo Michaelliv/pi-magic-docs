@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	AuthStorage,
+	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
 	createAgentSession,
@@ -8,6 +9,7 @@ import {
 	convertToLlm,
 } from "@mariozechner/pi-coding-agent";
 import { getModel } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import * as fs from "node:fs";
 
 const MAGIC_HEADER = /^# MAGIC DOC:/;
@@ -62,6 +64,35 @@ async function checkWithHaiku(
 	try {
 		const authStorage = AuthStorage.create();
 		const modelRegistry = ModelRegistry.create(authStorage);
+		let decision: boolean | undefined;
+
+		const loader = new DefaultResourceLoader({
+			extensionFactories: [
+				(api) => {
+					api.registerTool({
+						name: "report_decision",
+						label: "Report Decision",
+						description: "Report whether the magic docs should be updated",
+						parameters: Type.Object({
+							should_update: Type.Boolean({
+								description: "Whether the docs need updating",
+							}),
+							reason: Type.String({
+								description: "Brief reason for the decision",
+							}),
+						}),
+						execute: async (_id, params) => {
+							decision = params.should_update;
+							return {
+								content: [{ type: "text" as const, text: "Decision recorded." }],
+								details: {},
+							};
+						},
+					});
+				},
+			],
+		});
+		await loader.reload();
 
 		const { session } = await createAgentSession({
 			model,
@@ -69,17 +100,8 @@ async function checkWithHaiku(
 			authStorage,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
+			resourceLoader: loader,
 			tools: [],
-		});
-
-		let output = "";
-		session.subscribe((event) => {
-			if (
-				event.type === "message_update" &&
-				event.assistantMessageEvent.type === "text_delta"
-			) {
-				output += event.assistantMessageEvent.delta;
-			}
 		});
 
 		const docList = docs.map((d) => `- "${d.title}" (${d.path})`).join("\n");
@@ -92,15 +114,11 @@ async function checkWithHaiku(
 				`Does this conversation contain new information (decisions, architecture changes, new features, ` +
 				`corrections) that would meaningfully improve these docs? ` +
 				`Ignore small talk, questions with no answers, or conversations unrelated to the docs.\n\n` +
-				`Reply with JSON only, no other text: {"should_update": true, "reason": "..."} or {"should_update": false, "reason": "..."}`,
+				`Call report_decision with your answer.`,
 		);
 
 		session.dispose();
-
-		const match = output.match(/\{[\s\S]*?\}/);
-		if (!match) return true;
-		const json = JSON.parse(match[0]);
-		return json.should_update !== false;
+		return decision ?? true;
 	} catch {
 		return true; // fallback on any error
 	}
