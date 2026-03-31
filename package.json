@@ -1,6 +1,6 @@
 {
   "name": "pi-magic-docs",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Living documents that update themselves from your conversation — pi reads them, tracks them, and keeps them current",
   "keywords": [
     "pi-package"
