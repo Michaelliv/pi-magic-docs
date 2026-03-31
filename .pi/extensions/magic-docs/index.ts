@@ -57,14 +57,14 @@ function buildUpdateMessage(docs: TrackedDoc[]): string {
 async function checkWithHaiku(
 	docs: TrackedDoc[],
 	recentMessages: any[],
-): Promise<boolean> {
+): Promise<{ shouldUpdate: boolean; reason: string }> {
 	const model = getModel("anthropic", "claude-haiku-4-5");
 	if (!model) return true; // fallback: always update
 
 	try {
 		const authStorage = AuthStorage.create();
 		const modelRegistry = ModelRegistry.create(authStorage);
-		let decision: boolean | undefined;
+		let decision: { shouldUpdate: boolean; reason: string } | undefined;
 
 		const loader = new DefaultResourceLoader({
 			extensionFactories: [
@@ -82,7 +82,7 @@ async function checkWithHaiku(
 							}),
 						}),
 						execute: async (_id, params) => {
-							decision = params.should_update;
+							decision = { shouldUpdate: params.should_update, reason: params.reason };
 							return {
 								content: [{ type: "text" as const, text: "Decision recorded." }],
 								details: {},
@@ -118,9 +118,9 @@ async function checkWithHaiku(
 		);
 
 		session.dispose();
-		return decision ?? true;
+		return decision ?? { shouldUpdate: true, reason: "fallback" };
 	} catch {
-		return true; // fallback on any error
+		return { shouldUpdate: true, reason: "error" };
 	}
 }
 
@@ -202,7 +202,7 @@ export default function (pi: ExtensionAPI) {
 			.slice(-30);
 
 		const docs = Array.from(tracked.values());
-		const shouldUpdate = await checkWithHaiku(docs, recentMessages);
+		const { shouldUpdate } = await checkWithHaiku(docs, recentMessages);
 
 		if (!shouldUpdate) {
 			consecutiveIdleRuns = 0;
@@ -246,8 +246,8 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.registerCommand("magic-docs", {
-		description: "Force an immediate magic docs update",
+	pi.registerCommand("magic-docs-check", {
+		description: "Run the Haiku check and show whether magic docs should be updated",
 		handler: async (_args, ctx) => {
 			if (tracked.size === 0) {
 				ctx.ui.notify("No magic docs tracked in this session", "info");
@@ -255,18 +255,18 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const docs = Array.from(tracked.values());
+			const recentMessages = ctx.sessionManager
+				.getBranch()
+				.filter((e) => e.type === "message")
+				.map((e) => (e as any).message)
+				.slice(-30);
 
-			pi.sendMessage(
-				{
-					customType: "magic-docs-update",
-					content: buildUpdateMessage(docs),
-					display: true,
-				},
-				{ triggerTurn: true },
+			ctx.ui.notify("Running Haiku check...", "info");
+			const { shouldUpdate, reason } = await checkWithHaiku(docs, recentMessages);
+			ctx.ui.notify(
+				`should_update: ${shouldUpdate} — ${reason}`,
+				shouldUpdate ? "success" : "info",
 			);
-
-			lastUpdateTime = Date.now();
-			consecutiveIdleRuns = 0;
 		},
 	});
 
