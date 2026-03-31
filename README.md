@@ -7,14 +7,14 @@ Mark a doc with `# MAGIC DOC:`, work normally, and pi will periodically nudge it
 ## Install
 
 ```bash
-pi install git:github.com/Michaelliv/pi-magic-docs
+pi install npm:pi-magic-docs
 ```
 
 Or add it to `~/.pi/agent/settings.json`:
 
 ```json
 {
-  "packages": ["git:github.com/Michaelliv/pi-magic-docs"]
+  "packages": ["npm:pi-magic-docs"]
 }
 ```
 
@@ -29,7 +29,7 @@ Good fits:
 - entry-point maps for large codebases
 - docs that should explain **why** things exist, not mirror the code
 
-When pi sees a magic doc, it starts tracking it for the session. After the conversation goes idle, the extension injects a follow-up telling the agent to re-read the doc and update it in place.
+When pi sees a magic doc, it starts tracking it for the session. After the conversation goes idle, the extension injects a follow-up message (via `sendMessage` with `customType: "magic-docs-update"`) telling the agent to re-read the doc and update it in place.
 
 ## Magic doc format
 
@@ -50,7 +50,7 @@ Rules:
 
 1. pi reads, edits, or writes a magic doc
 2. the extension starts tracking that file for the current session
-3. after **2 consecutive idle agent replies** (no tool calls), the extension injects an update prompt
+3. after **2 consecutive idle agent runs** (no tool calls in either), the extension injects an update prompt
 4. the agent re-reads the tracked docs and updates them in place if anything meaningful changed
 5. a 5-minute cooldown prevents rapid-fire reminders
 
