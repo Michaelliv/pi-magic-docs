@@ -1,15 +1,9 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	AuthStorage,
-	DefaultResourceLoader,
-	ModelRegistry,
-	SessionManager,
-	createAgentSession,
 	serializeConversation,
 	convertToLlm,
 } from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
 import * as fs from "node:fs";
 
 const MAGIC_HEADER = /^# MAGIC DOC:/;
@@ -58,69 +52,58 @@ async function checkWithHaiku(
 	docs: TrackedDoc[],
 	recentMessages: any[],
 ): Promise<{ shouldUpdate: boolean; reason: string }> {
-	const model = getModel("anthropic", "claude-haiku-4-5");
-	if (!model) return true; // fallback: always update
-
 	try {
-		const authStorage = AuthStorage.create();
-		const modelRegistry = ModelRegistry.create(authStorage);
-		let decision: { shouldUpdate: boolean; reason: string } | undefined;
-
-		const loader = new DefaultResourceLoader({
-			extensionFactories: [
-				(api) => {
-					api.registerTool({
-						name: "report_decision",
-						label: "Report Decision",
-						description: "Report whether the magic docs should be updated",
-						parameters: Type.Object({
-							should_update: Type.Boolean({
-								description: "Whether the docs need updating",
-							}),
-							reason: Type.String({
-								description: "Brief reason for the decision",
-							}),
-						}),
-						execute: async (_id, params) => {
-							decision = { shouldUpdate: params.should_update, reason: params.reason };
-							return {
-								content: [{ type: "text" as const, text: "Decision recorded." }],
-								details: {},
-							};
-						},
-					});
-				},
-			],
-		});
-		await loader.reload();
-
-		const { session } = await createAgentSession({
-			model,
-			thinkingLevel: "off",
-			authStorage,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			resourceLoader: loader,
-			tools: [],
-		});
+		const apiKey = await AuthStorage.create().getApiKey("anthropic");
+		if (!apiKey) return { shouldUpdate: true, reason: "no api key" };
 
 		const docList = docs.map((d) => `- "${d.title}" (${d.path})`).join("\n");
 		const conversationText = serializeConversation(convertToLlm(recentMessages));
 
-		await session.prompt(
-			`You decide whether living documentation files need updating based on a conversation.\n\n` +
-				`Tracked docs:\n${docList}\n\n` +
-				`Recent conversation:\n${conversationText}\n\n` +
-				`Does this conversation contain new information (decisions, architecture changes, new features, ` +
-				`corrections) that would meaningfully improve these docs? ` +
-				`Ignore small talk, questions with no answers, or conversations unrelated to the docs.\n\n` +
-				`Call report_decision with your answer.`,
-		);
+		const res = await fetch("https://api.anthropic.com/v1/messages", {
+			method: "POST",
+			headers: {
+				"x-api-key": apiKey,
+				"anthropic-version": "2023-06-01",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				model: "claude-haiku-4-5",
+				max_tokens: 256,
+				tools: [
+					{
+						name: "report_decision",
+						description: "Report whether the magic docs should be updated",
+						input_schema: {
+							type: "object",
+							properties: {
+								should_update: { type: "boolean", description: "Whether the docs need updating" },
+								reason: { type: "string", description: "Brief reason" },
+							},
+							required: ["should_update", "reason"],
+						},
+					},
+				],
+				tool_choice: { type: "tool", name: "report_decision" },
+				messages: [
+					{
+						role: "user",
+						content:
+							`Decide whether these living docs need updating based on the conversation.\n\n` +
+							`Tracked docs:\n${docList}\n\n` +
+							`Conversation:\n${conversationText}\n\n` +
+							`Update if the conversation contains new decisions, architecture changes, features, or corrections. ` +
+							`Skip for small talk, unrelated topics, or no new information.`,
+					},
+				],
+			}),
+		});
 
-		session.dispose();
-		return decision ?? { shouldUpdate: true, reason: "fallback" };
-	} catch {
-		return { shouldUpdate: true, reason: "error" };
+		const data = await res.json() as any;
+		const toolUse = data.content?.find((b: any) => b.type === "tool_use");
+		if (!toolUse) return { shouldUpdate: true, reason: "no tool call" };
+		return { shouldUpdate: toolUse.input.should_update, reason: toolUse.input.reason };
+	} catch (e) {
+		return { shouldUpdate: true, reason: `error: ${e}` };
 	}
 }
 
