@@ -52,7 +52,7 @@ Rules:
 2. the extension starts tracking that file for the current session
 3. after **2 consecutive idle agent replies** (no tool calls), the extension injects an update prompt
 4. the agent re-reads the tracked docs and updates them in place if anything meaningful changed
-5. a cooldown prevents rapid-fire reminders
+5. a 5-minute cooldown prevents rapid-fire reminders
 
 This keeps docs aligned with the actual conversation, not just the current file contents.
 

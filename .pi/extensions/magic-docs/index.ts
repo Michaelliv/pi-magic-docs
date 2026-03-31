@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
 	let consecutiveIdleRuns = 0;
 	let lastUpdateTime = 0;
 	const IDLE_RUN_THRESHOLD = 2;
-	const COOLDOWN_MS = 2 * 60 * 1000;
+	const COOLDOWN_MS = 5 * 60 * 1000;
 
 	function detect(filePath: string, content: string) {
 		const parsed = parseHeader(content);
