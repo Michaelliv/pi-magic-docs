@@ -162,19 +162,13 @@ export default function (pi: ExtensionAPI) {
 				})
 				.join("\n");
 
-			pi.sendMessage(
-				{
-					customType: "magic-docs-update",
-					content:
-						`Update ${docs.length} magic doc(s):\n\n${list}\n\n` +
-						`Re-read each, edit in-place with anything new from our conversation. ` +
-						`Be terse, high signal only. Document architecture and WHY things exist. ` +
-						`Never duplicate what's obvious from code. Delete outdated sections. ` +
-						`Never append "Previously..." or "Updated to..." notes. ` +
-						`Fix typos and broken formatting. If nothing meaningful changed, skip silently.`,
-					display: true,
-				},
-				{ triggerTurn: true },
+			pi.sendUserMessage(
+				`Update ${docs.length} magic doc(s):\n\n${list}\n\n` +
+				`Re-read each, edit in-place with anything new from our conversation. ` +
+				`Be terse, high signal only. Document architecture and WHY things exist. ` +
+				`Never duplicate what's obvious from code. Delete outdated sections. ` +
+				`Never append "Previously..." or "Updated to..." notes. ` +
+				`Fix typos and broken formatting. If nothing meaningful changed, skip silently.`,
 			);
 
 			lastUpdateTime = Date.now();
