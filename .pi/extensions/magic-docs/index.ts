@@ -1,13 +1,6 @@
-import type { ExtensionAPI, ResourceLoader, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import {
-	AuthStorage,
-	ModelRegistry,
-	SessionManager,
-	SettingsManager,
-	createAgentSession,
-	createExtensionRuntime,
-} from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import { complete, getModel } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import * as fs from "node:fs";
 
@@ -53,74 +46,63 @@ function buildUpdateMessage(docs: TrackedDoc[]): string {
 	);
 }
 
+const REPORT_TOOL = {
+	name: "report_decision",
+	description: "Report whether the magic docs should be updated",
+	parameters: Type.Object({
+		should_update: Type.Boolean({ description: "Whether the docs need updating" }),
+		reason: Type.String({ description: "Brief reason" }),
+	}),
+};
+
 async function checkWithHaiku(
 	docs: TrackedDoc[],
-	recentMessages: any[], // AgentMessage[]
+	recentMessages: any[],
+	apiKey: string,
 ): Promise<{ shouldUpdate: boolean; reason: string }> {
 	const model = getModel("anthropic", "claude-haiku-4-5");
 	if (!model) return { shouldUpdate: true, reason: "model not found" };
 
 	try {
-		const authStorage = AuthStorage.create();
-		const modelRegistry = new ModelRegistry(authStorage);
-		let decision: { shouldUpdate: boolean; reason: string } | undefined;
-
-		const reportTool: ToolDefinition = {
-			name: "report_decision",
-			label: "Report Decision",
-			description: "Report whether the magic docs should be updated",
-			parameters: Type.Object({
-				should_update: Type.Boolean({ description: "Whether the docs need updating" }),
-				reason: Type.String({ description: "Brief reason" }),
-			}),
-			execute: async (_id, params) => {
-				decision = { shouldUpdate: params.should_update, reason: params.reason };
-				return {
-					content: [{ type: "text" as const, text: "Decision recorded." }],
-					details: {},
-				};
-			},
-		};
-
-		const resourceLoader: ResourceLoader = {
-			getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-			getSkills: () => ({ skills: [], diagnostics: [] }),
-			getPrompts: () => ({ prompts: [], diagnostics: [] }),
-			getThemes: () => ({ themes: [], diagnostics: [] }),
-			getAgentsFiles: () => ({ agentsFiles: [] }),
-			getSystemPrompt: () =>
-				"You decide whether documentation needs updating. You MUST call the report_decision tool. Do not write text responses.",
-			getAppendSystemPrompt: () => [],
-			extendResources: () => {},
-			reload: async () => {},
-		};
-
-		const { session } = await createAgentSession({
-			model,
-			thinkingLevel: "off",
-			authStorage,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-			resourceLoader,
-			customTools: [reportTool],
-			tools: [],
-		});
-
-		// Inject the actual conversation messages
-		session.agent.replaceMessages(recentMessages);
-
 		const docList = docs.map((d) => `- "${d.title}" (${d.path})`).join("\n");
+		const conversationText = serializeConversation(convertToLlm(recentMessages));
 
-		await session.prompt(
-			`Based on the conversation above, do these docs need updating?\n\n` +
-				`Tracked docs:\n${docList}\n\n` +
-				`Update if there are new decisions, architecture changes, features, or corrections. ` +
-				`Skip for small talk, unrelated topics, or no new information.`,
+		const response = await complete(
+			model,
+			{
+				systemPrompt:
+					"You decide whether documentation needs updating based on a conversation. " +
+					"You MUST call the report_decision tool. Do not write text responses.",
+				messages: [
+					{
+						role: "user" as const,
+						content: [
+							{
+								type: "text" as const,
+								text:
+									`Do these docs need updating based on the conversation?\n\n` +
+									`Tracked docs:\n${docList}\n\n` +
+									`Conversation:\n${conversationText}\n\n` +
+									`Update if there are new decisions, architecture changes, features, or corrections ` +
+									`relevant to these specific docs. Skip for small talk, unrelated topics, or no new information.`,
+							},
+						],
+						timestamp: Date.now(),
+					},
+				],
+				tools: [REPORT_TOOL],
+			},
+			{ apiKey },
 		);
 
-		session.dispose();
-		return decision ?? { shouldUpdate: true, reason: "no tool call" };
+		const toolCall = response.content.find((c: any) => c.type === "toolCall");
+		if (!toolCall || toolCall.type !== "toolCall") {
+			return { shouldUpdate: true, reason: "no tool call" };
+		}
+		return {
+			shouldUpdate: toolCall.arguments.should_update,
+			reason: toolCall.arguments.reason,
+		};
 	} catch (e) {
 		return { shouldUpdate: true, reason: `error: ${e}` };
 	}
@@ -196,6 +178,12 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (tracked.size === 0) return;
 
+		// Get API key
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(
+			getModel("anthropic", "claude-haiku-4-5")!,
+		);
+		if (!auth.ok || !auth.apiKey) return;
+
 		// Get recent conversation messages for Haiku to evaluate
 		const recentMessages = ctx.sessionManager
 			.getBranch()
@@ -204,8 +192,11 @@ export default function (pi: ExtensionAPI) {
 			.slice(-30);
 
 		const docs = Array.from(tracked.values());
-		const { shouldUpdate, reason } = await checkWithHaiku(docs, recentMessages);
-		ctx.ui.notify(`Magic docs check: ${shouldUpdate ? "updating" : "skipped"} — ${reason}`, shouldUpdate ? "info" : "info");
+		const { shouldUpdate, reason } = await checkWithHaiku(docs, recentMessages, auth.apiKey);
+		ctx.ui.notify(
+			`Magic docs check: ${shouldUpdate ? "updating" : "skipped"} — ${reason}`,
+			"info",
+		);
 
 		if (!shouldUpdate) {
 			consecutiveIdleRuns = 0;
