@@ -1,9 +1,10 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import {
 	AuthStorage,
 	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
+	SettingsManager,
 	createAgentSession,
 	serializeConversation,
 	convertToLlm,
@@ -59,38 +60,33 @@ async function checkWithHaiku(
 	recentMessages: any[],
 ): Promise<{ shouldUpdate: boolean; reason: string }> {
 	const model = getModel("anthropic", "claude-haiku-4-5");
-	if (!model) return true; // fallback: always update
+	if (!model) return { shouldUpdate: true, reason: "model not found" };
 
 	try {
 		const authStorage = AuthStorage.create();
 		const modelRegistry = ModelRegistry.create(authStorage);
 		let decision: { shouldUpdate: boolean; reason: string } | undefined;
 
+		const reportTool: ToolDefinition = {
+			name: "report_decision",
+			label: "Report Decision",
+			description: "Report whether the magic docs should be updated",
+			parameters: Type.Object({
+				should_update: Type.Boolean({ description: "Whether the docs need updating" }),
+				reason: Type.String({ description: "Brief reason" }),
+			}),
+			execute: async (_id, params) => {
+				decision = { shouldUpdate: params.should_update, reason: params.reason };
+				return {
+					content: [{ type: "text" as const, text: "Decision recorded." }],
+					details: {},
+				};
+			},
+		};
+
 		const loader = new DefaultResourceLoader({
-			extensionFactories: [
-				(api) => {
-					api.registerTool({
-						name: "report_decision",
-						label: "Report Decision",
-						description: "Report whether the magic docs should be updated",
-						parameters: Type.Object({
-							should_update: Type.Boolean({
-								description: "Whether the docs need updating",
-							}),
-							reason: Type.String({
-								description: "Brief reason for the decision",
-							}),
-						}),
-						execute: async (_id, params) => {
-							decision = { shouldUpdate: params.should_update, reason: params.reason };
-							return {
-								content: [{ type: "text" as const, text: "Decision recorded." }],
-								details: {},
-							};
-						},
-					});
-				},
-			],
+			systemPromptOverride: () =>
+				"You decide whether documentation needs updating. Use the report_decision tool to answer.",
 		});
 		await loader.reload();
 
@@ -100,7 +96,9 @@ async function checkWithHaiku(
 			authStorage,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			resourceLoader: loader,
+			customTools: [reportTool],
 			tools: [],
 		});
 
@@ -108,19 +106,17 @@ async function checkWithHaiku(
 		const conversationText = serializeConversation(convertToLlm(recentMessages));
 
 		await session.prompt(
-			`You decide whether living documentation files need updating based on a conversation.\n\n` +
-				`Tracked docs:\n${docList}\n\n` +
+			`Tracked docs:\n${docList}\n\n` +
 				`Recent conversation:\n${conversationText}\n\n` +
 				`Does this conversation contain new information (decisions, architecture changes, new features, ` +
 				`corrections) that would meaningfully improve these docs? ` +
-				`Ignore small talk, questions with no answers, or conversations unrelated to the docs.\n\n` +
-				`Call report_decision with your answer.`,
+				`Ignore small talk, questions with no answers, or conversations unrelated to the docs.`,
 		);
 
 		session.dispose();
-		return decision ?? { shouldUpdate: true, reason: "fallback" };
-	} catch {
-		return { shouldUpdate: true, reason: "error" };
+		return decision ?? { shouldUpdate: true, reason: "no tool call" };
+	} catch (e) {
+		return { shouldUpdate: true, reason: `error: ${e}` };
 	}
 }
 
